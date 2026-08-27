@@ -1,0 +1,6 @@
+streamlit
+torch
+torchvision
+facenet-pytorch
+pillow
+opencv-python-headless
