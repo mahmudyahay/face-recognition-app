@@ -15,6 +15,10 @@ st.set_page_config(
     layout="wide"
 )
 
+# Recognition threshold
+# Smaller distance = more similar face
+RECOGNITION_THRESHOLD = 0.7
+
 
 # ============================================================
 # PATHS
@@ -72,6 +76,7 @@ if "captured_images" not in st.session_state:
 def load_embeddings():
 
     if EMBEDDING_FILE.exists():
+
         return torch.load(
             EMBEDDING_FILE,
             map_location=device,
@@ -141,19 +146,24 @@ def recognize_face(image):
 
     results = []
 
+    # Process every detected face
     for i, prob in enumerate(probs):
 
+        # Ignore faces with low detection confidence
         if prob <= 0.98:
             continue
 
         face = faces[i]
 
+        # Generate embedding for this face
         with torch.no_grad():
 
             emb = resnet(
                 face.unsqueeze(0)
             )
 
+        # Store distances between this face
+        # and every registered face
         distances = {}
 
         for known_emb, name in embedding_data:
@@ -167,18 +177,39 @@ def recognize_face(image):
 
             distances[name] = dist
 
+        # Find the closest registered face
         closest, min_dist = min(
             distances.items(),
             key=lambda x: x[1]
         )
 
-        results.append(
-            {
-                "name": closest,
-                "distance": min_dist,
-                "probability": prob
-            }
-        )
+        # ====================================================
+        # THRESHOLD CHECK
+        # ====================================================
+
+        if min_dist <= RECOGNITION_THRESHOLD:
+
+            # Good enough match
+            results.append(
+                {
+                    "name": closest,
+                    "distance": min_dist,
+                    "probability": prob,
+                    "recognized": True
+                }
+            )
+
+        else:
+
+            # Too far from every registered person
+            results.append(
+                {
+                    "name": "Unknown",
+                    "distance": min_dist,
+                    "probability": prob,
+                    "recognized": False
+                }
+            )
 
     return results
 
@@ -208,6 +239,10 @@ def home_page():
 
     col1, col2 = st.columns(2)
 
+    # ========================================================
+    # REGISTRATION BUTTON
+    # ========================================================
+
     with col1:
 
         st.subheader("📝 Registration")
@@ -223,7 +258,12 @@ def home_page():
         ):
 
             st.session_state.page = "registration"
+
             st.rerun()
+
+    # ========================================================
+    # RECOGNITION BUTTON
+    # ========================================================
 
     with col2:
 
@@ -240,9 +280,14 @@ def home_page():
         ):
 
             st.session_state.page = "recognition"
+
             st.rerun()
 
     st.divider()
+
+    # ========================================================
+    # HOW TO USE
+    # ========================================================
 
     st.subheader("📖 How to Use")
 
@@ -272,12 +317,25 @@ def home_page():
 
         The person with the smallest embedding distance is
         considered the closest match.
+
+        ### 6️⃣ Stranger Protection
+
+        The system uses a recognition threshold of **0.7**.
+
+        If the closest distance is greater than **0.7**,
+        the person will be treated as **Unknown** instead
+        of being incorrectly identified as a registered person.
         """
     )
 
     st.info(
         "💡 For better accuracy, use clear images with good "
         "lighting and make sure the person's face is visible."
+    )
+
+    st.warning(
+        f"🔐 Current recognition threshold: "
+        f"{RECOGNITION_THRESHOLD}"
     )
 
 
@@ -292,11 +350,16 @@ def registration_page():
     if st.button("⬅️ Back to Home"):
 
         st.session_state.page = "home"
+
         st.session_state.captured_images = []
 
         st.rerun()
 
     st.divider()
+
+    # ========================================================
+    # USER INFORMATION
+    # ========================================================
 
     name = st.text_input(
         "Person's Name"
@@ -322,6 +385,10 @@ def registration_page():
             DATASET_DIR / names
         )
 
+        # ====================================================
+        # CHECK IF USER ALREADY EXISTS
+        # ====================================================
+
         if person_dir.exists():
 
             st.warning(
@@ -329,6 +396,10 @@ def registration_page():
             )
 
             return
+
+        # ====================================================
+        # CAPTURE SECTION
+        # ====================================================
 
         st.subheader(
             "📸 Capture 15 Face Images"
@@ -352,6 +423,10 @@ def registration_page():
             f"**{current_count}/15**"
         )
 
+        # ====================================================
+        # CAPTURE IMAGE
+        # ====================================================
+
         if current_count < 15:
 
             camera_image = st.camera_input(
@@ -361,13 +436,19 @@ def registration_page():
 
             if camera_image is not None:
 
-                image_bytes = camera_image.getvalue()
+                image_bytes = (
+                    camera_image.getvalue()
+                )
 
                 st.session_state.captured_images.append(
                     image_bytes
                 )
 
                 st.rerun()
+
+        # ====================================================
+        # COMPLETE REGISTRATION
+        # ====================================================
 
         else:
 
@@ -380,21 +461,28 @@ def registration_page():
                 use_container_width=True
             ):
 
+                # Create user's directory
                 person_dir.mkdir(
                     parents=True,
                     exist_ok=True
                 )
 
+                # Load existing embeddings
                 embedding_data = load_embeddings()
 
                 generated = 0
 
                 progress_bar = st.progress(0)
 
+                # ====================================================
+                # PROCESS ALL 15 IMAGES
+                # ====================================================
+
                 for i, image_bytes in enumerate(
                     st.session_state.captured_images
                 ):
 
+                    # Save image
                     filename = (
                         person_dir /
                         f"frame{i}.jpeg"
@@ -409,14 +497,17 @@ def registration_page():
                             image_bytes
                         )
 
+                    # Open image
                     image = Image.open(
                         filename
                     ).convert("RGB")
 
+                    # Generate embedding
                     embedding = generate_embedding(
                         image
                     )
 
+                    # Save valid embedding
                     if embedding is not None:
 
                         embedding_data.append(
@@ -432,10 +523,15 @@ def registration_page():
                         (i + 1) / 15
                     )
 
+                # ====================================================
+                # SAVE EMBEDDINGS TO FILE
+                # ====================================================
+
                 save_embeddings(
                     embedding_data
                 )
 
+                # Clear captured images
                 st.session_state.captured_images = []
 
                 st.success(
@@ -456,6 +552,7 @@ def recognition_page():
     if st.button("⬅️ Back to Home"):
 
         st.session_state.page = "home"
+
         st.rerun()
 
     st.divider()
@@ -466,11 +563,19 @@ def recognition_page():
 
     col1, col2 = st.columns(2)
 
+    # ========================================================
+    # CAMERA
+    # ========================================================
+
     with col1:
 
         camera_image = st.camera_input(
             "📸 Take a picture"
         )
+
+    # ========================================================
+    # FILE UPLOAD
+    # ========================================================
 
     with col2:
 
@@ -482,6 +587,10 @@ def recognition_page():
                 "png"
             ]
         )
+
+    # ========================================================
+    # SELECT IMAGE
+    # ========================================================
 
     image_source = (
         camera_image
@@ -501,6 +610,10 @@ def recognition_page():
             use_container_width=True
         )
 
+        # ====================================================
+        # RECOGNIZE BUTTON
+        # ====================================================
+
         if st.button(
             "🔍 Recognize Face",
             use_container_width=True
@@ -514,11 +627,24 @@ def recognition_page():
                     image
                 )
 
+            # ====================================================
+            # NO FACE / NO RESULT
+            # ====================================================
+
             if not results:
 
                 st.error(
-                    "❌ No registered face was found."
+                    "❌ No face could be recognized."
                 )
+
+                st.info(
+                    "Please make sure your face is clearly "
+                    "visible and try again."
+                )
+
+            # ====================================================
+            # DISPLAY RESULTS
+            # ====================================================
 
             else:
 
@@ -529,23 +655,67 @@ def recognition_page():
                 for result in results:
 
                     name = result["name"]
+
                     distance = result["distance"]
+
                     probability = result["probability"]
 
-                    st.write(
-                        f"**Detected face:** "
-                        f"{name}"
-                    )
+                    recognized = result["recognized"]
 
-                    st.write(
-                        f"Face detection confidence: "
-                        f"{probability:.2%}"
-                    )
+                    # =================================================
+                    # RECOGNIZED
+                    # =================================================
 
-                    st.write(
-                        f"Embedding distance: "
-                        f"{distance:.4f}"
-                    )
+                    if recognized:
+
+                        st.success(
+                            f"✅ Face recognized: {name}"
+                        )
+
+                        st.write(
+                            f"Face detection confidence: "
+                            f"{probability:.2%}"
+                        )
+
+                        st.write(
+                            f"Embedding distance: "
+                            f"{distance:.4f}"
+                        )
+
+                        st.write(
+                            f"Recognition threshold: "
+                            f"{RECOGNITION_THRESHOLD}"
+                        )
+
+                    # =================================================
+                    # UNKNOWN
+                    # =================================================
+
+                    else:
+
+                        st.error(
+                            "❌ Face not recognized."
+                        )
+
+                        st.warning(
+                            "The face does not match any "
+                            "registered person closely enough."
+                        )
+
+                        st.info(
+                            "📸 Please retake the picture "
+                            "and try again."
+                        )
+
+                        st.write(
+                            f"Closest distance: "
+                            f"{distance:.4f}"
+                        )
+
+                        st.write(
+                            f"Required threshold: "
+                            f"{RECOGNITION_THRESHOLD}"
+                        )
 
                     st.divider()
 
