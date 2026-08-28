@@ -17,7 +17,7 @@ st.set_page_config(
 
 # Recognition threshold
 # Smaller distance = more similar face
-RECOGNITION_THRESHOLD = 0.7
+RECOGNITION_THRESHOLD = 0.8
 
 
 # ============================================================
